@@ -1,0 +1,6 @@
+node_modules/
+server/data/portal.db
+server/uploads/
+client/dist/
+.env
+*.local
