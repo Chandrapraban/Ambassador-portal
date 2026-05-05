@@ -195,8 +195,9 @@ function RequestBoardTab({ ambassador }) {
     ['Claimed', 'Call Scheduled', 'Follow-up Needed'].includes(r.status)
   ).length
 
-  function isPriority(req) {
-    return (req.preferred_ambassadors || []).includes(ambassador.id)
+  function getPriorityRank(req) {
+    const idx = (req.preferred_ambassadors || []).indexOf(ambassador.id)
+    return idx // -1 = not preferred, 0 = 1st, 1 = 2nd, 2 = 3rd
   }
 
   function isUrgent(req) {
@@ -204,8 +205,13 @@ function RequestBoardTab({ ambassador }) {
   }
 
   const sorted = [...requests].sort((a, b) => {
-    if (isPriority(a) && !isPriority(b)) return -1
-    if (!isPriority(a) && isPriority(b)) return 1
+    const ra = getPriorityRank(a)
+    const rb = getPriorityRank(b)
+    const aPreferred = ra >= 0
+    const bPreferred = rb >= 0
+    if (aPreferred && !bPreferred) return -1
+    if (!aPreferred && bPreferred) return 1
+    if (aPreferred && bPreferred) return ra - rb
     return new Date(a.created_at) - new Date(b.created_at)
   })
 
@@ -250,20 +256,33 @@ function RequestBoardTab({ ambassador }) {
       ) : (
         <div className="space-y-3">
           {sorted.map(req => {
-            const priority = isPriority(req)
+            const rank = getPriorityRank(req)
+            const isPreferred = rank >= 0
             const urgent = isUrgent(req)
+            const rankLabels = ['#1 Priority', '#2 Priority', '#3 Priority']
+            const rankStyles = [
+              'bg-duke-blue text-white',
+              'bg-duke-light text-white',
+              'bg-gray-400 text-white',
+            ]
             return (
               <div key={req.request_id} className={[
                 'card p-4 transition-all',
-                priority ? 'border-duke-blue border-l-4' : '',
-                urgent ? 'border-red-300' : '',
+                isPreferred ? 'border-duke-blue border-l-4' : '',
+                urgent && !isPreferred ? 'border-red-300' : '',
               ].join(' ')}>
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap mb-1">
                       <span className="font-semibold text-gray-900">{req.prospect_name}</span>
-                      {priority && (
-                        <span className="text-xs bg-duke-blue text-white px-2 py-0.5 rounded-full">Preferred pick</span>
+                      {isPreferred ? (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${rankStyles[rank]}`}>
+                          {rankLabels[rank]}
+                        </span>
+                      ) : (
+                        <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+                          {req.match_anyone ? 'General Request' : 'Open Request'}
+                        </span>
                       )}
                       {req.status === 'Waiting for Preferred' && (
                         <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">Waiting for preferred</span>
@@ -336,7 +355,21 @@ function RequestBoardTab({ ambassador }) {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
           <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl max-h-[80vh] overflow-y-auto">
             <h3 className="font-bold text-gray-900 mb-1">Request Claimed!</h3>
-            <p className="text-sm text-gray-500 mb-4">Here are the prospect's details.</p>
+            {(() => {
+              const claimRank = (postClaim.preferred_ambassadors || []).indexOf(ambassador.id)
+              return claimRank >= 0 ? (
+                <p className="text-sm mb-4">
+                  <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-semibold mr-2 ${['bg-duke-blue text-white','bg-duke-light text-white','bg-gray-400 text-white'][claimRank]}`}>
+                    {['#1 Priority','#2 Priority','#3 Priority'][claimRank]}
+                  </span>
+                  <span className="text-gray-500">This prospect specifically chose you.</span>
+                </p>
+              ) : (
+                <p className="text-sm text-gray-500 mb-4">
+                  {postClaim.match_anyone ? 'General request — prospect opted to match with anyone.' : 'Open request.'} Here are their details.
+                </p>
+              )
+            })()}
 
             <div className="space-y-3 text-sm">
               <div><span className="font-medium">Name:</span> {postClaim.prospect_name}</div>

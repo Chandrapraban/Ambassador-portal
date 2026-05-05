@@ -39,18 +39,30 @@ function StepIndicator({ current, total }) {
   )
 }
 
-function AmbassadorCard({ ambassador, selected, onToggle, disabled }) {
+const RANK_LABELS = ['1st', '2nd', '3rd']
+const RANK_COLORS = [
+  'bg-duke-blue text-white',
+  'bg-duke-light text-white',
+  'bg-gray-400 text-white',
+]
+
+function AmbassadorCard({ ambassador, rank, selected, onToggle, disabled }) {
   const photoSrc = ambassador.photo_url || null
 
   return (
     <div
       onClick={() => !disabled && onToggle(ambassador.id)}
       className={[
-        'card p-4 cursor-pointer transition-all',
+        'card p-4 cursor-pointer transition-all relative',
         selected ? 'border-duke-blue ring-2 ring-duke-blue ring-opacity-50' : 'hover:border-gray-300',
         disabled && !selected ? 'opacity-40 cursor-not-allowed' : '',
       ].join(' ')}
     >
+      {rank !== undefined && (
+        <div className={`absolute -top-2 -left-2 w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center shadow ${RANK_COLORS[rank]}`}>
+          {rank + 1}
+        </div>
+      )}
       <div className="flex items-start gap-3">
         <div className="w-12 h-12 rounded-full bg-duke-blue flex-shrink-0 overflow-hidden flex items-center justify-center">
           {photoSrc ? (
@@ -260,19 +272,73 @@ export default function ProspectForm() {
 
             {!form.match_anyone && (
               <>
+                {/* Priority order strip */}
+                {form.preferred_ambassadors.length > 0 && (
+                  <div className="mb-5 bg-blue-50 border border-blue-100 rounded-xl p-3">
+                    <p className="text-xs font-semibold text-duke-blue mb-2 uppercase tracking-wide">Your Priority Order</p>
+                    <div className="space-y-1.5">
+                      {form.preferred_ambassadors.map((id, i) => {
+                        const amb = ambassadors.find(a => a.id === id)
+                        if (!amb) return null
+                        return (
+                          <div key={id} className="flex items-center gap-2 bg-white rounded-lg px-3 py-2 border border-blue-100">
+                            <span className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center flex-shrink-0 ${RANK_COLORS[i]}`}>
+                              {i + 1}
+                            </span>
+                            <span className="text-sm font-medium text-gray-800 flex-1">{amb.name}</span>
+                            <span className="text-xs text-gray-400">{RANK_LABELS[i]} choice</span>
+                            <div className="flex gap-1 ml-1">
+                              <button
+                                type="button"
+                                disabled={i === 0}
+                                onClick={() => {
+                                  const arr = [...form.preferred_ambassadors]
+                                  ;[arr[i - 1], arr[i]] = [arr[i], arr[i - 1]]
+                                  update('preferred_ambassadors', arr)
+                                }}
+                                className="p-0.5 rounded hover:bg-blue-100 disabled:opacity-30 disabled:cursor-not-allowed text-gray-500"
+                                title="Move up"
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                disabled={i === form.preferred_ambassadors.length - 1}
+                                onClick={() => {
+                                  const arr = [...form.preferred_ambassadors]
+                                  ;[arr[i], arr[i + 1]] = [arr[i + 1], arr[i]]
+                                  update('preferred_ambassadors', arr)
+                                }}
+                                className="p-0.5 rounded hover:bg-blue-100 disabled:opacity-30 disabled:cursor-not-allowed text-gray-500"
+                                title="Move down"
+                              >
+                                ▼
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <p className="text-sm text-gray-600 mb-3">
-                  {form.preferred_ambassadors.length}/3 selected
+                  {form.preferred_ambassadors.length}/3 selected — click to add, numbers show your priority order
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {activeAmbassadors.map(a => (
-                    <AmbassadorCard
-                      key={a.id}
-                      ambassador={a}
-                      selected={form.preferred_ambassadors.includes(a.id)}
-                      onToggle={toggleAmbassador}
-                      disabled={form.preferred_ambassadors.length >= 3 && !form.preferred_ambassadors.includes(a.id)}
-                    />
-                  ))}
+                  {activeAmbassadors.map(a => {
+                    const rankIdx = form.preferred_ambassadors.indexOf(a.id)
+                    return (
+                      <AmbassadorCard
+                        key={a.id}
+                        ambassador={a}
+                        rank={rankIdx >= 0 ? rankIdx : undefined}
+                        selected={rankIdx >= 0}
+                        onToggle={toggleAmbassador}
+                        disabled={form.preferred_ambassadors.length >= 3 && rankIdx === -1}
+                      />
+                    )
+                  })}
                   {activeAmbassadors.length === 0 && (
                     <p className="text-gray-400 text-sm col-span-2">No ambassadors available right now.</p>
                   )}
