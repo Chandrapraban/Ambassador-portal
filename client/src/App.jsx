@@ -3,6 +3,7 @@ import { useAuth } from './context/AuthContext'
 import ProspectForm from './pages/ProspectForm'
 import Confirmation from './pages/Confirmation'
 import Login from './pages/Login'
+import AuthCallback from './pages/AuthCallback'
 import AmbassadorPortal from './pages/AmbassadorPortal'
 import AdminDashboard from './pages/AdminDashboard'
 import AcceptClaim from './pages/AcceptClaim'
@@ -31,6 +32,7 @@ export default function App() {
       <Route path="/" element={<ProspectForm />} />
       <Route path="/confirmation" element={<Confirmation />} />
       <Route path="/login" element={<Login />} />
+      <Route path="/auth/callback" element={<AuthCallback />} />
       <Route path="/accept-claim/:requestId" element={<AcceptClaim />} />
       <Route path="/wait-preferred/:requestId" element={<WaitPreferred />} />
       <Route path="/feedback/:requestId" element={<FeedbackForm />} />
