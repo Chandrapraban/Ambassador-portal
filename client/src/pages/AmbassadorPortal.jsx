@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useAuth } from '../context/AuthContext'
 import Navbar from '../components/Navbar'
 import api from '../api'
 import { formatDistanceToNow, format, parseISO, differenceInHours } from 'date-fns'
+import { detectTimezone, getTimezoneAbbr, convertSlotTime, formatCallInTimezone } from '../utils/timezone'
 
 const STATUSES = ['Claimed', 'Call Scheduled', 'Call Completed', 'Follow-up Needed']
 const CONCENTRATIONS = [
@@ -175,6 +176,7 @@ function RequestBoardTab({ ambassador }) {
   const [claimingId, setClaimingId] = useState(null)
   const [confirmOvercap, setConfirmOvercap] = useState(null)
   const [postClaim, setPostClaim] = useState(null)
+  const myTz = useMemo(() => detectTimezone(), [])
 
   const fetchRequests = useCallback(async () => {
     const [boardRes, mineRes] = await Promise.all([
@@ -302,16 +304,28 @@ function RequestBoardTab({ ambassador }) {
                     )}
                     {req.availability_slots?.length > 0 && (
                       <div className="mt-2">
-                        <p className="text-xs text-gray-400 mb-1">Available:</p>
+                        <p className="text-xs text-gray-400 mb-1">
+                          Available
+                          {req.prospect_timezone && req.prospect_timezone !== myTz
+                            ? ` (${getTimezoneAbbr(req.prospect_timezone)} → your time ${getTimezoneAbbr(myTz)}):`
+                            : ` (${getTimezoneAbbr(req.prospect_timezone || myTz)}):`}
+                        </p>
                         <div className="flex flex-wrap gap-1">
-                          {req.availability_slots.slice(0, 4).map((slot, i) => (
-                            <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
-                              {format(new Date(slot.date + 'T12:00:00'), 'MMM d')}
-                              {slot.times?.length > 0 && ` (${slot.times.length} slots)`}
-                            </span>
-                          ))}
-                          {req.availability_slots.length > 4 && (
-                            <span className="text-xs text-gray-400">+{req.availability_slots.length - 4} more</span>
+                          {req.availability_slots.slice(0, 3).map((slot, i) => {
+                            const prospTz = req.prospect_timezone || 'America/New_York'
+                            const convertedTimes = slot.times?.slice(0, 2).map(t => {
+                              const conv = convertSlotTime(slot.date, t, prospTz, myTz)
+                              return conv || t
+                            })
+                            return (
+                              <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                                {format(new Date(slot.date + 'T12:00:00'), 'MMM d')}
+                                {convertedTimes?.length > 0 && `: ${convertedTimes.join(', ')}${slot.times.length > 2 ? ' …' : ''}`}
+                              </span>
+                            )
+                          })}
+                          {req.availability_slots.length > 3 && (
+                            <span className="text-xs text-gray-400">+{req.availability_slots.length - 3} more days</span>
                           )}
                         </div>
                       </div>
@@ -383,16 +397,38 @@ function RequestBoardTab({ ambassador }) {
               )}
               {postClaim.availability_slots?.length > 0 && (
                 <div>
-                  <span className="font-medium">Availability:</span>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-medium">Availability:</span>
+                    {postClaim.prospect_timezone && postClaim.prospect_timezone !== myTz && (
+                      <span className="text-xs text-gray-400">
+                        {getTimezoneAbbr(postClaim.prospect_timezone)} → your time ({getTimezoneAbbr(myTz)})
+                      </span>
+                    )}
+                  </div>
                   <div className="mt-1 space-y-1">
-                    {postClaim.availability_slots.map((slot, i) => (
-                      <div key={i} className="bg-gray-50 rounded px-3 py-1.5">
-                        <span className="font-medium">{format(new Date(slot.date + 'T12:00:00'), 'EEEE, MMMM d')}</span>
-                        {slot.times?.length > 0 && (
-                          <span className="text-gray-500 ml-2">{slot.times.join(', ')}</span>
-                        )}
-                      </div>
-                    ))}
+                    {postClaim.availability_slots.map((slot, i) => {
+                      const prospTz = postClaim.prospect_timezone || 'America/New_York'
+                      return (
+                        <div key={i} className="bg-gray-50 rounded px-3 py-1.5">
+                          <span className="font-medium">{format(new Date(slot.date + 'T12:00:00'), 'EEEE, MMMM d')}</span>
+                          {slot.times?.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {slot.times.map(time => {
+                                const conv = convertSlotTime(slot.date, time, prospTz, myTz)
+                                return (
+                                  <span key={time} className="text-xs bg-white border border-gray-200 rounded px-1.5 py-0.5">
+                                    {conv || time}
+                                    {conv && conv !== time && (
+                                      <span className="text-gray-400 ml-1">({time} {getTimezoneAbbr(prospTz)})</span>
+                                    )}
+                                  </span>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -421,6 +457,7 @@ function MyRequestsTab() {
   const [requests, setRequests] = useState([])
   const [saving, setSaving] = useState({})
   const [edits, setEdits] = useState({})
+  const myTz = useMemo(() => detectTimezone(), [])
 
   useEffect(() => {
     api.get('/requests/mine').then(res => {
@@ -443,10 +480,16 @@ function MyRequestsTab() {
 
   async function saveRequest(requestId) {
     setSaving(s => ({ ...s, [requestId]: true }))
+    const edit = edits[requestId]
+    // Include the ambassador's timezone whenever a scheduled call datetime is set
+    const payload = {
+      ...edit,
+      ...(edit.scheduled_call_datetime ? { call_timezone: myTz } : {}),
+    }
     try {
-      await api.put(`/requests/${requestId}`, edits[requestId])
+      await api.put(`/requests/${requestId}`, payload)
       setRequests(prev => prev.map(r =>
-        r.request_id === requestId ? { ...r, ...edits[requestId] } : r
+        r.request_id === requestId ? { ...r, ...payload } : r
       ))
     } catch {}
     setSaving(s => ({ ...s, [requestId]: false }))
@@ -491,14 +534,26 @@ function MyRequestsTab() {
 
               {req.availability_slots?.length > 0 && (
                 <div className="mb-4">
-                  <p className="text-xs font-medium text-gray-500 mb-1">Prospect availability:</p>
+                  <p className="text-xs font-medium text-gray-500 mb-1">
+                    Prospect availability
+                    {req.prospect_timezone && req.prospect_timezone !== myTz
+                      ? ` (${getTimezoneAbbr(req.prospect_timezone)} → your time ${getTimezoneAbbr(myTz)}):`
+                      : ` (${getTimezoneAbbr(req.prospect_timezone || myTz)}):`}
+                  </p>
                   <div className="flex flex-wrap gap-1">
-                    {req.availability_slots.map((slot, i) => (
-                      <span key={i} className="text-xs bg-blue-50 text-duke-blue px-2 py-1 rounded">
-                        {format(new Date(slot.date + 'T12:00:00'), 'MMM d')}
-                        {slot.times?.length > 0 && `: ${slot.times.join(', ')}`}
-                      </span>
-                    ))}
+                    {req.availability_slots.map((slot, i) => {
+                      const prospTz = req.prospect_timezone || 'America/New_York'
+                      const convertedTimes = slot.times?.map(t => {
+                        const conv = convertSlotTime(slot.date, t, prospTz, myTz)
+                        return conv ? `${conv}${conv !== t ? ` (${t} ${getTimezoneAbbr(prospTz)})` : ''}` : t
+                      })
+                      return (
+                        <span key={i} className="text-xs bg-blue-50 text-duke-blue px-2 py-1 rounded">
+                          {format(new Date(slot.date + 'T12:00:00'), 'MMM d')}
+                          {convertedTimes?.length > 0 && `: ${convertedTimes.join(', ')}`}
+                        </span>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -516,6 +571,17 @@ function MyRequestsTab() {
                   <input type="datetime-local" className="input"
                     value={edit.scheduled_call_datetime || ''}
                     onChange={e => updateEdit(req.request_id, 'scheduled_call_datetime', e.target.value)} />
+                  {req.scheduled_call_datetime && (
+                    <p className="text-xs text-gray-400 mt-1">
+                      {formatCallInTimezone(req.scheduled_call_datetime, req.call_timezone || 'America/New_York', myTz)}
+                      {req.prospect_timezone && req.prospect_timezone !== myTz && (
+                        <span className="ml-2 text-purple-500">
+                          · {formatCallInTimezone(req.scheduled_call_datetime, req.call_timezone || 'America/New_York', req.prospect_timezone)} (prospect)
+                        </span>
+                      )}
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-400 mt-0.5">Times saved in your timezone ({getTimezoneAbbr(myTz)})</p>
                 </div>
               </div>
 

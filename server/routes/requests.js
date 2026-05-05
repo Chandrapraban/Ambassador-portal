@@ -43,20 +43,26 @@ function parseRequest(row) {
 
 // Public: create request
 router.post('/', (req, res) => {
-  const { prospect_name, prospect_email, concentration, message, availability_slots, match_anyone, preferred_ambassadors } = req.body;
+  const { prospect_name, prospect_email, concentration, message, availability_slots, match_anyone, preferred_ambassadors, prospect_timezone } = req.body;
   if (!prospect_name || !prospect_email) {
     return res.status(400).json({ error: 'Name and email required' });
   }
   const requestId = generateRequestId();
+  const prefAmbs = preferred_ambassadors || [];
+  // Start as 'Waiting for Preferred' if the prospect chose specific ambassadors;
+  // otherwise immediately 'Open' for anyone to claim.
+  const initialStatus = prefAmbs.length > 0 ? 'Waiting for Preferred' : 'Open';
   db.prepare(`
-    INSERT INTO requests (request_id, prospect_name, prospect_email, concentration, message, availability_slots, match_anyone, preferred_ambassadors)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO requests (request_id, prospect_name, prospect_email, concentration, message, availability_slots, match_anyone, preferred_ambassadors, status, prospect_timezone)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     requestId, prospect_name, prospect_email,
     concentration || '', message || '',
     JSON.stringify(availability_slots || []),
     match_anyone ? 1 : 0,
-    JSON.stringify(preferred_ambassadors || [])
+    JSON.stringify(prefAmbs),
+    initialStatus,
+    prospect_timezone || 'America/New_York'
   );
   const row = db.prepare('SELECT * FROM requests WHERE request_id = ?').get(requestId);
   res.status(201).json(parseRequest(row));
@@ -76,13 +82,22 @@ router.get('/', requireAuth, (req, res) => {
     query += ' ORDER BY r.created_at DESC';
     rows = db.prepare(query).all(...params);
   } else {
-    // Ambassador sees open + waiting-for-preferred requests on board
+    // 'Open' tickets are visible to all ambassadors.
+    // 'Waiting for Preferred' tickets are only visible to the ambassadors
+    // listed in preferred_ambassadors (until the scheduler opens them up).
     rows = db.prepare(`
       SELECT r.*, a.name as ambassador_name FROM requests r
       LEFT JOIN ambassadors a ON r.claimed_by = a.id
-      WHERE r.status IN ('Open', 'Waiting for Preferred')
+      WHERE r.status = 'Open'
+         OR (
+           r.status = 'Waiting for Preferred'
+           AND EXISTS (
+             SELECT 1 FROM json_each(r.preferred_ambassadors)
+             WHERE CAST(value AS INTEGER) = ?
+           )
+         )
       ORDER BY r.created_at ASC
-    `).all();
+    `).all(req.user.ambassadorId);
   }
   res.json(rows.map(parseRequest));
 });
@@ -143,7 +158,8 @@ router.get('/analytics', requireAuth, (req, res) => {
       SUM(CASE WHEN status = 'Call Scheduled' THEN 1 ELSE 0 END) as scheduled,
       SUM(CASE WHEN status = 'Call Completed' THEN 1 ELSE 0 END) as completed,
       SUM(CASE WHEN status = 'Follow-up Needed' THEN 1 ELSE 0 END) as followup,
-      SUM(CASE WHEN status = 'Waiting for Preferred' THEN 1 ELSE 0 END) as waiting
+      SUM(CASE WHEN status = 'Waiting for Preferred' THEN 1 ELSE 0 END) as waiting,
+      SUM(CASE WHEN status = 'Escalated' THEN 1 ELSE 0 END) as escalated
     FROM requests
   `).get();
 
@@ -194,7 +210,7 @@ router.put('/:requestId', requireAuth, (req, res) => {
     return res.status(403).json({ error: 'Not your request' });
   }
 
-  const { status, notes, scheduled_call_datetime, concentration, claimed_by } = req.body;
+  const { status, notes, scheduled_call_datetime, call_timezone, concentration, claimed_by } = req.body;
 
   if (req.user.role === 'admin') {
     db.prepare(`
@@ -202,20 +218,22 @@ router.put('/:requestId', requireAuth, (req, res) => {
         status = COALESCE(?, status),
         notes = COALESCE(?, notes),
         scheduled_call_datetime = COALESCE(?, scheduled_call_datetime),
+        call_timezone = COALESCE(?, call_timezone),
         concentration = COALESCE(?, concentration),
         claimed_by = COALESCE(?, claimed_by),
         updated_at = CURRENT_TIMESTAMP
       WHERE request_id = ?
-    `).run(status, notes, scheduled_call_datetime, concentration, claimed_by, req.params.requestId);
+    `).run(status, notes, scheduled_call_datetime, call_timezone, concentration, claimed_by, req.params.requestId);
   } else {
     db.prepare(`
       UPDATE requests SET
         status = COALESCE(?, status),
         notes = COALESCE(?, notes),
         scheduled_call_datetime = COALESCE(?, scheduled_call_datetime),
+        call_timezone = COALESCE(?, call_timezone),
         updated_at = CURRENT_TIMESTAMP
       WHERE request_id = ?
-    `).run(status, notes, scheduled_call_datetime, req.params.requestId);
+    `).run(status, notes, scheduled_call_datetime, call_timezone, req.params.requestId);
   }
 
   const updated = db.prepare('SELECT * FROM requests WHERE request_id = ?').get(req.params.requestId);

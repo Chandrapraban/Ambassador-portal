@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import AvailabilityPicker from '../components/AvailabilityPicker'
+import { COMMON_TIMEZONES, detectTimezone } from '../utils/timezone'
 
 const CONCENTRATIONS = [
   'Business Fundamentals',
@@ -120,10 +121,12 @@ export default function ProspectForm() {
     availability_slots: [],
     match_anyone: false,
     preferred_ambassadors: [],
+    prospect_timezone: 'America/New_York',
   })
 
   useEffect(() => {
     api.get('/ambassadors').then(res => setAmbassadors(res.data))
+    update('prospect_timezone', detectTimezone())
   }, [])
 
   function update(field, value) {
@@ -236,12 +239,31 @@ export default function ProspectForm() {
         {step === 2 && (
           <div className="card p-6">
             <h2 className="text-lg font-bold text-gray-900 mb-1">When are you available?</h2>
-            <p className="text-sm text-gray-500 mb-6">
+            <p className="text-sm text-gray-500 mb-4">
               Select multiple dates and time slots so your ambassador can find a time that works.
             </p>
+
+            {/* Timezone selector */}
+            <div className="flex items-center gap-3 mb-5 p-3 bg-blue-50 border border-blue-100 rounded-xl">
+              <svg className="w-4 h-4 text-duke-blue flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <label className="text-sm text-gray-700 font-medium whitespace-nowrap">Your timezone:</label>
+              <select
+                className="input flex-1 text-sm py-1.5"
+                value={form.prospect_timezone}
+                onChange={e => update('prospect_timezone', e.target.value)}
+              >
+                {COMMON_TIMEZONES.map(tz => (
+                  <option key={tz.value} value={tz.value}>{tz.label}</option>
+                ))}
+              </select>
+            </div>
+
             <AvailabilityPicker
               value={form.availability_slots}
               onChange={v => update('availability_slots', v)}
+              timezone={form.prospect_timezone}
             />
           </div>
         )}

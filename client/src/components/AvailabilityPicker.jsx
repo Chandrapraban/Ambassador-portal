@@ -2,8 +2,9 @@ import { useState } from 'react'
 import {
   format, startOfMonth, endOfMonth, startOfWeek, endOfWeek,
   eachDayOfInterval, isSameMonth, isToday, isBefore, startOfDay,
-  addMonths, subMonths, isSameDay
+  addMonths, subMonths,
 } from 'date-fns'
+import { getTimezoneAbbr } from '../utils/timezone'
 
 const TIME_SLOTS = [
   '8:00 AM', '9:00 AM', '10:00 AM', '11:00 AM', '12:00 PM',
@@ -11,7 +12,7 @@ const TIME_SLOTS = [
   '6:00 PM', '7:00 PM', '8:00 PM'
 ]
 
-export default function AvailabilityPicker({ value = [], onChange }) {
+export default function AvailabilityPicker({ value = [], onChange, timezone }) {
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const today = startOfDay(new Date())
 
@@ -110,6 +111,11 @@ export default function AvailabilityPicker({ value = [], onChange }) {
           })}
         </div>
         <p className="text-xs text-gray-400 mt-2 text-center">Click dates to add availability</p>
+        {timezone && (
+          <p className="text-xs text-center mt-1 text-duke-blue font-medium">
+            Times are in {getTimezoneAbbr(timezone)}
+          </p>
+        )}
       </div>
 
       {/* Time slot panel */}

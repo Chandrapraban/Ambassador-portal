@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import Navbar from '../components/Navbar'
 import api from '../api'
 import { formatDistanceToNow, parseISO, format } from 'date-fns'
+import { detectTimezone, getTimezoneAbbr, formatCallInTimezone } from '../utils/timezone'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LineChart, Line, CartesianGrid, Legend
 } from 'recharts'
 
-const STATUSES = ['Open', 'Waiting for Preferred', 'Claimed', 'Call Scheduled', 'Call Completed', 'Follow-up Needed']
+const STATUSES = ['Open', 'Waiting for Preferred', 'Claimed', 'Call Scheduled', 'Call Completed', 'Follow-up Needed', 'Escalated']
 const CONCENTRATIONS = [
   'Business Fundamentals', 'Finance', 'Marketing & Sales',
   'Operations & Supply Chain Management', 'Strategy & Leadership',
@@ -21,6 +22,7 @@ const STATUS_COLORS = {
   'Call Scheduled': '#F59E0B',
   'Call Completed': '#10B981',
   'Follow-up Needed': '#F97316',
+  'Escalated': '#EF4444',
 }
 const CHART_COLORS = ['#003087', '#0680CD', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6']
 
@@ -57,9 +59,20 @@ function OverviewTab() {
         <StatCard label="In Progress" value={(t.claimed || 0) + (t.scheduled || 0)} color="text-blue-600" />
         <StatCard label="Completed" value={t.completed} color="text-green-600" />
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+      {t.escalated > 0 && (
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-red-700">Escalated Tickets Require Attention</p>
+            <p className="text-xs text-red-500 mt-0.5">{t.escalated} ticket{t.escalated !== 1 ? 's' : ''} unclaimed past the 48-hour window</p>
+          </div>
+          <span className="text-2xl font-bold text-red-600">{t.escalated}</span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
         <StatCard label="Waiting for Preferred" value={t.waiting} color="text-purple-600" />
         <StatCard label="Follow-up Needed" value={t.followup} color="text-orange-600" />
+        <StatCard label="Escalated" value={t.escalated} color="text-red-600" />
         <StatCard
           label="Avg Feedback Rating"
           value={analytics.avgRating ? `${Number(analytics.avgRating).toFixed(1)} / 5` : 'No ratings yet'}
@@ -95,6 +108,7 @@ function RequestManagementTab() {
   const [expanded, setExpanded] = useState(null)
   const [edits, setEdits] = useState({})
   const [saving, setSaving] = useState({})
+  const myTz = useMemo(() => detectTimezone(), [])
 
   useEffect(() => {
     const params = new URLSearchParams()
@@ -110,8 +124,13 @@ function RequestManagementTab() {
 
   async function save(req) {
     setSaving(s => ({ ...s, [req.request_id]: true }))
+    const edit = edits[req.request_id]
+    const payload = {
+      ...edit,
+      ...(edit.scheduled_call_datetime ? { call_timezone: myTz } : {}),
+    }
     try {
-      await api.put(`/requests/${req.request_id}`, edits[req.request_id])
+      await api.put(`/requests/${req.request_id}`, payload)
       const params = new URLSearchParams()
       if (filterStatus) params.set('status', filterStatus)
       if (filterConc) params.set('concentration', filterConc)
@@ -169,6 +188,11 @@ function RequestManagementTab() {
                   {req.ambassador_name && (
                     <span className="text-xs text-gray-500">→ {req.ambassador_name}</span>
                   )}
+                  {req.prospect_timezone && (
+                    <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                      {getTimezoneAbbr(req.prospect_timezone)}
+                    </span>
+                  )}
                   {req.feedback_rating && (
                     <span className="text-xs text-yellow-600">{'★'.repeat(req.feedback_rating)}</span>
                   )}
@@ -223,6 +247,16 @@ function RequestManagementTab() {
                       <input type="datetime-local" className="input"
                         value={edit.scheduled_call_datetime || ''}
                         onChange={e => updateEdit(req.request_id, 'scheduled_call_datetime', e.target.value)} />
+                      {req.scheduled_call_datetime && (
+                        <p className="text-xs text-gray-400 mt-1 space-y-0.5">
+                          <span className="block">{formatCallInTimezone(req.scheduled_call_datetime, req.call_timezone || 'America/New_York', myTz)} (your time)</span>
+                          {req.prospect_timezone && req.prospect_timezone !== (req.call_timezone || 'America/New_York') && (
+                            <span className="block text-purple-500">
+                              {formatCallInTimezone(req.scheduled_call_datetime, req.call_timezone || 'America/New_York', req.prospect_timezone)} (prospect's time)
+                            </span>
+                          )}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -422,6 +456,143 @@ function AmbassadorManagementTab() {
   )
 }
 
+// ─── Escalated Tab ────────────────────────────────────────────────────────────
+
+function EscalatedTab() {
+  const [requests, setRequests] = useState([])
+  const [ambassadors, setAmbassadors] = useState([])
+  const [edits, setEdits] = useState({})
+  const [saving, setSaving] = useState({})
+  const [expanded, setExpanded] = useState(null)
+  const myTz = useMemo(() => detectTimezone(), [])
+
+  useEffect(() => {
+    api.get('/requests?status=Escalated').then(res => setRequests(res.data))
+    api.get('/ambassadors').then(res => setAmbassadors(res.data))
+  }, [])
+
+  function updateEdit(id, field, val) {
+    setEdits(e => ({ ...e, [id]: { ...e[id], [field]: val } }))
+  }
+
+  async function save(req) {
+    setSaving(s => ({ ...s, [req.request_id]: true }))
+    const edit = edits[req.request_id]
+    const payload = {
+      ...edit,
+      ...(edit.scheduled_call_datetime ? { call_timezone: myTz } : {}),
+    }
+    try {
+      await api.put(`/requests/${req.request_id}`, payload)
+      const res = await api.get('/requests?status=Escalated')
+      setRequests(res.data)
+      setExpanded(null)
+    } catch {}
+    setSaving(s => ({ ...s, [req.request_id]: false }))
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-4">
+        <h2 className="text-lg font-bold text-gray-900">Escalated Tickets</h2>
+        {requests.length > 0 && (
+          <span className="bg-red-100 text-red-700 text-xs font-semibold px-2 py-0.5 rounded-full">{requests.length} unresolved</span>
+        )}
+      </div>
+      <p className="text-sm text-gray-500 mb-5">
+        These tickets were not claimed by any ambassador within the 48-hour window. Assign an ambassador or change the status to resolve them.
+      </p>
+
+      {requests.length === 0 ? (
+        <div className="card p-12 text-center text-gray-400">No escalated tickets. All good!</div>
+      ) : (
+        <div className="space-y-2">
+          {requests.map(req => {
+            const edit = edits[req.request_id] || {}
+            const isOpen = expanded === req.request_id
+            return (
+              <div key={req.request_id} className="card border-l-4 border-red-400 overflow-hidden">
+                <button
+                  onClick={() => {
+                    setExpanded(isOpen ? null : req.request_id)
+                    if (!edits[req.request_id]) {
+                      setEdits(e => ({
+                        ...e,
+                        [req.request_id]: {
+                          status: 'Open',
+                          notes: req.notes || '',
+                          scheduled_call_datetime: req.scheduled_call_datetime || '',
+                          claimed_by: req.claimed_by || '',
+                        }
+                      }))
+                    }
+                  }}
+                  className="w-full text-left p-4 flex items-center justify-between hover:bg-red-50 transition-colors"
+                >
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="font-medium text-gray-900">{req.prospect_name}</span>
+                    <span className="text-sm text-gray-400">{req.prospect_email}</span>
+                    <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">Escalated</span>
+                    {req.preferred_ambassadors?.length > 0 && (
+                      <span className="text-xs text-purple-600">Had {req.preferred_ambassadors.length} preferred ambassador{req.preferred_ambassadors.length !== 1 ? 's' : ''}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-gray-400">
+                    <span>{req.concentration}</span>
+                    <span>{formatDistanceToNow(parseISO(req.created_at), { addSuffix: true })}</span>
+                    <span className="text-gray-300">{isOpen ? '▲' : '▼'}</span>
+                  </div>
+                </button>
+
+                {isOpen && (
+                  <div className="border-t border-red-100 p-4 bg-red-50 space-y-4">
+                    {req.message && (
+                      <div className="text-sm text-gray-600 bg-white rounded-lg p-3 border border-gray-100">
+                        "{req.message}"
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="label">Reassign Status</label>
+                        <select className="input" value={edit.status || 'Open'}
+                          onChange={e => updateEdit(req.request_id, 'status', e.target.value)}>
+                          {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label">Assign Ambassador</label>
+                        <select className="input" value={edit.claimed_by || ''}
+                          onChange={e => updateEdit(req.request_id, 'claimed_by', e.target.value || null)}>
+                          <option value="">Unassigned</option>
+                          {ambassadors.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label">Scheduled Call</label>
+                        <input type="datetime-local" className="input"
+                          value={edit.scheduled_call_datetime || ''}
+                          onChange={e => updateEdit(req.request_id, 'scheduled_call_datetime', e.target.value)} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label">Notes</label>
+                      <textarea className="input resize-none min-h-16" value={edit.notes || ''}
+                        onChange={e => updateEdit(req.request_id, 'notes', e.target.value)} />
+                    </div>
+                    <button onClick={() => save(req)} disabled={saving[req.request_id]} className="btn-primary text-sm">
+                      {saving[req.request_id] ? 'Saving...' : 'Resolve & Save'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Analytics Tab ────────────────────────────────────────────────────────────
 
 function AnalyticsTab() {
@@ -539,10 +710,17 @@ function AnalyticsTab() {
 
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
-const TABS = ['Overview', 'Request Management', 'Ambassador Management', 'Analytics']
+const TABS = ['Overview', 'Escalated', 'Request Management', 'Ambassador Management', 'Analytics']
 
 export default function AdminDashboard() {
   const [tab, setTab] = useState('Overview')
+  const [escalatedCount, setEscalatedCount] = useState(0)
+
+  useEffect(() => {
+    api.get('/requests/analytics').then(res => {
+      setEscalatedCount(res.data.totals?.escalated || 0)
+    })
+  }, [])
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -555,15 +733,21 @@ export default function AdminDashboard() {
               <button
                 key={t}
                 onClick={() => setTab(t)}
-                className={`pb-3 text-sm whitespace-nowrap transition-colors ${tab === t ? 'tab-active' : 'tab-inactive'}`}
+                className={`pb-3 text-sm whitespace-nowrap transition-colors flex items-center gap-1.5 ${tab === t ? 'tab-active' : 'tab-inactive'}`}
               >
                 {t}
+                {t === 'Escalated' && escalatedCount > 0 && (
+                  <span className="bg-red-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
+                    {escalatedCount}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
         </div>
 
         {tab === 'Overview' && <OverviewTab />}
+        {tab === 'Escalated' && <EscalatedTab />}
         {tab === 'Request Management' && <RequestManagementTab />}
         {tab === 'Ambassador Management' && <AmbassadorManagementTab />}
         {tab === 'Analytics' && <AnalyticsTab />}
